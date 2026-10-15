@@ -8,7 +8,7 @@
 
 
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -20,7 +20,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 
-**当前版本：v1.0.0** — 变更记录见 [CHANGELOG.md](CHANGELOG.md)
+**当前版本：v1.1.0** — 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 目录
 
@@ -63,12 +63,14 @@
 - **逐帧播放**：空格播放 / 暂停，`←` `→` 逐帧，时间轴点击 / 拖动跳帧，fps 12–60 可选
 - **消除位移 / 人物居中**：原地播放（x/z 钉回基准、保留垂直起伏）；逐帧把人物钉在画面正中，序列不漂移
 - **四类导出**：单帧 PNG、PNG 序列 ZIP（含 `meta.json`）、GIF、骨骼 JSON
+- **Godot 动画导出**：一键生成 Godot 原生 Animation 资源（`.tres`），挂到 AnimationPlayer 即可播放
 - **背景可控**：绿 / 白预设、纯透明（PNG 保留 alpha）、自定义色盘；GIF 透明走专用调色板索引，硬边抠图
 - **固定机位取景**：序列导出先用第 0 帧标定机位（骨骼粗对准 + 像素质心迭代收敛），整个序列共用，帧间相机纹丝不动
 
 ### fbx-anim-tool（命令行版）
 
-- **一条命令**出全套产物：`bones.json` + 30 fps PNG 序列 + GIF + 缩略图 contact sheet
+- **一条命令**出全套产物：`bones.json` + 30 fps PNG 序列 + GIF + 缩略图 contact sheet + **Godot Animation 资源（`animation.tres`）**
+- **原生 .tres**：在 Godot 内用真实骨架直接生成，数值完全精确（`--no-tres` 关闭）
 - **只要骨骼数据**：`--no-render --no-gif` 秒级完成
 - **朝向 / 镜头独立**：`--facing` 只旋转模型，`--cam` 固定世界镜头方向
 - **原地播放**：默认把髋骨位置轨道 x/z 归零（保留 y），跑步循环原地播放
@@ -121,6 +123,7 @@ python fbx_anim_tool.py "D:\Downloads\3D 动作人物模型\Maria\Maria Run.fbx"
 | 文件                  | 内容                                      |
 | ------------------- | --------------------------------------- |
 | `bones.json`        | 每帧 65 根骨骼的 local / global TRS（四元数 xyzw） |
+| `animation.tres`    | Godot 4.3+ Animation 资源，可直接挂 AnimationPlayer |
 | `frame_0000.png` …  | 30 fps 逐帧画面                             |
 | `animation.gif`     | 30 fps 循环 GIF                           |
 | `meta.json`         | 动画名、帧数、骨骼表、朝向、可用 clip 列表                |
@@ -173,11 +176,28 @@ export FBXAT_HOST_PROJECT="D:\path\to\any\godot\project"
 | 序列 ZIP  | 全部帧 PNG + `meta.json`，fflate 打包          |
 | GIF     | GIF89a + LZW 编码，帧延时按累积时间轴分配（30 fps 精确）   |
 | 骨骼 JSON | 每帧每骨 local + global TRS（与命令行工具同约定）       |
+| Godot 动画 | Godot 4.3+ Animation 资源（`.tres`），见下文      |
 
 - 背景色：绿 / 白预设 + 棋盘格「纯透明」+ 自定义色盘，对 PNG（单帧 / 序列）和 GIF 均生效。
 - 纯透明模式：PNG 保留 alpha 通道；GIF 走透明索引（255 号槽专用，纯黑不会被误抠）。
 - 导出自动隐藏骨骼小球与骨架线；纯透明模式下同时隐藏地面。
 - 取景策略：**人物居中开**时整个序列共用第 0 帧标定的机位（帧间不抖）；**关**时机位固定在世界原点，人物按真实走位穿过画面；**单帧 PNG** 对当前帧做完整取景迭代，人物精确落在画面正中。
+
+**Godot 动画（.tres）**——把当前 clip 转成 Godot 原生 Animation 资源，拷进 Godot 工程即可用：
+
+- 轨道：每骨 position / rotation / scale 三条，路径 `Skeleton3D:<骨名>`；骨名按 Godot 导入后的约定转换（`mixamorig:Hips` → `mixamorig_Hips`）；全程未变化的轨道塌缩为首尾两帧，控制文件体积
+- 单位：位置按 FBX 原始单位 → 米换算（×0.01，与 Godot 的 FBX 导入一致）；旋转原样透传——three.js 与 Godot 同为右手系、Y-up、四元数 xyzw
+- 用法：
+
+  ```gdscript
+  var lib := AnimationLibrary.new()
+  lib.add_animation("idle", load("res://maria_idle_anim.tres"))
+  $AnimationPlayer.add_animation_library("", lib)
+  $AnimationPlayer.play("idle")
+  ```
+
+- 精度：Godot 回环实测（挂到导入的 Maria 骨架播放后读回位姿）与源数据差 ≤ 0.35 mm / ≤ 0.11°，残差来自两个引擎对 FBX 关键帧的插值精度，肉眼不可辨；要完全精确请用命令行版（在 Godot 内用真实骨架直接生成）
+- 前提：FBX 为厘米单位（Mixamo 等）。米制的 FBX 需调整 `app.js` 里的 `FBX_CM_TO_M`
 
 **批量导出（命令行驱动页面）**
 
@@ -209,6 +229,9 @@ python fbx_anim_tool.py model.fbx --fps 60 --loop 0
 
 # 保留原动画的根位移（默认钉住髋骨，让跑步循环原地播放）
 python fbx_anim_tool.py model.fbx --no-in-place
+
+# 不要 Godot 动画资源（默认产出 animation.tres）
+python fbx_anim_tool.py model.fbx --no-tres
 ```
 
 `--facing` 决定角色面朝方向（配合 `--cam side` 即为侧身镜头）：
@@ -258,7 +281,7 @@ python make_gif.py path/to/frames --fps 30 --bg "#17171c" --sheet
 }
 ```
 
-`local` 是父级相对位姿，适合喂给引擎的骨骼驱动；`global` 是世界位姿，适合直接做 IK 或碰撞定位。`bone_names` 给出索引 → 骨骼名的映射。PNG 序列的 `meta.json` 额外记录背景色（`background` 字段）、分辨率与帧数。
+`local` 是父级相对位姿，适合喂给引擎的骨骼驱动；`global` 是世界位姿，适合直接做 IK 或碰撞定位（v1.1.0 起 `local` 为真实的父骨相对位姿——此前 three.js FBXLoader 的孪生节点结构导致导出全为单位值）。`bone_names` 给出索引 → 骨骼名的映射。PNG 序列的 `meta.json` 额外记录背景色（`background` 字段）、分辨率与帧数。
 
 ---
 
@@ -308,6 +331,7 @@ FBX-Anim-Studio/
 - **GIF 编码**：中点切分量化 256 色 + LZW（含 4096 表满重置），帧延时按累积时间取整避免累积误差；透明 GIF 保留 255 号索引专用于透明
 - **Godot 离屏渲染**：`--headless` 使用 dummy 渲染器，`get_image()` 只会返回空，因此命令行版以最小窗口（64×64，置于屏幕外）+ Vulkan 后端运行，SubViewport 负责离屏出图
 - **批量导出链路**：页内逐帧渲染 → POST 到本机接收服务写盘，绕过无头浏览器取消 blob 下载的问题；git-bash 不展开 `[012]` 括号 glob，贴图按 `_0/_1/_2` 显式列举并忽略大小写
+- **Godot 回环自检**：`godot_project/tools/roundtrip_test.gd` 可把任意 `.tres` 挂到已导入该 FBX 的骨架上播放并读回位姿，用于验证导出是否正确
 
 ---
 

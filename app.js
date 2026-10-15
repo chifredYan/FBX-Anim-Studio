@@ -9,7 +9,7 @@ import { encodeGif } from './gifenc.js';
 const DEFAULT_ZOOM = 0.6;
 
 /** Tool version (semantic versioning). Bump together with README / CHANGELOG. */
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 // ============================== state ==============================
 const S = {
@@ -19,6 +19,7 @@ const S = {
   action: null,
   skeleton: null,       // Skeleton3D equivalent: THREE.Skeleton
   bones: [],            // flat list of {bone, depth, name}
+  boneSet: null,        // Set of skeleton bones — twin detection (see boneLocalNode)
   duration: 0,
   fps: 30,
   frameCount: 0,
@@ -152,6 +153,7 @@ async function loadFbxBuffer(buf, name) {
   log(`单位归一化：${rawH.toFixed(1)} → ${TARGET_H}（缩放 ${scale.toFixed(4)}）`);
 
   S.bones = S.skeleton.bones.map((b, i) => ({ bone: b, name: b.name || `bone_${i}`, depth: depthOf(b, S.skeleton.bones[0]) }));
+  S.boneSet = new Set(S.skeleton.bones);
   S.rootBoneName = S.bones[0].name;
 
   S.origBonePos.clear();
@@ -179,12 +181,25 @@ async function loadFbxBuffer(buf, name) {
 /** Sample frame 0 with root motion intact and remember where the character
  *  started, so `applyInPlace` can pin the horizontal drift back to it and
  *  `applyCentering` can keep that spot on the screen centre. */
+/** FBXLoader builds a TWIN hierarchy for every bone: an outer "animation node"
+ *  carrying the clip's local TRS (the mixer binds to it), plus the skeleton bone
+ *  itself — an inner node whose local transform stays identity, parented under
+ *  its twin. Reading a bone's own position/quaternion therefore yields identity
+ *  for the entire skeleton (world matrices are still correct, which is why
+ *  rendering, centring and the global TRS export all work). This helper returns
+ *  the node whose LOCAL transform is the bone's true animated local pose. */
+function boneLocalNode(bone) {
+  const p = bone.parent;
+  if (p && p.name && p.name === bone.name && S.boneSet && !S.boneSet.has(p)) return p;
+  return bone;
+}
+
 function captureBase() {
   if (!S.skeleton || !S.model) return;
   const was = S.inPlace;
   S.inPlace = false;
   seekFrame(0, false);
-  S.rootBase = S.skeleton.bones[0].position.clone();
+  S.rootBase = boneLocalNode(S.skeleton.bones[0]).position.clone();
   // frame 0 defines "centre": park its hips on the origin (screen centre)
   const v = new THREE.Vector3();
   S.skeleton.bones[0].getWorldPosition(v);
@@ -228,7 +243,7 @@ function clearModel() {
   for (const m of S.pickMeshes) scene.remove(m);
   S.pickMeshes = [];
   if (S.skelHelper) { scene.remove(S.skelHelper); S.skelHelper = null; }
-  S.mixer = null; S.action = null; S.clips = []; S.bones = []; S.skeleton = null;
+  S.mixer = null; S.action = null; S.clips = []; S.bones = []; S.skeleton = null; S.boneSet = null;
   S.selected = null;
   $('bone-tree').innerHTML = '<div class="muted" style="padding:8px">尚未导入模型</div>';
 }
@@ -300,7 +315,7 @@ function seekFrame(f, playState = S.playing) {
  *  Vertical motion (jumps, bobs) is deliberately preserved. */
 function applyInPlace() {
   if (!S.inPlace || !S.skeleton) return;
-  const rb = S.skeleton.bones[0];
+  const rb = boneLocalNode(S.skeleton.bones[0]);   // pin the ANIMATED twin, not the identity bone
   if (S.rootBase) {
     rb.position.x = S.rootBase.x;
     rb.position.z = S.rootBase.z;
@@ -1065,7 +1080,8 @@ function metaPayload() {
       handedness: 'right-handed (three.js)',
       up: '+Y', forward_at_yaw0: '-Z',
       rotation: 'quaternion xyzw',
-      pose_space: 'bone-local, parent-relative',
+      pose_space: 'bone-local, parent-relative to the parent bone',
+      units: 'FBX source units (centimetres for Mixamo); global TRS is normalised to 1.75 m',
     },
   };
 }
@@ -1081,7 +1097,8 @@ $('exp-json').addEventListener('click', async () => {
     const _v3 = v => [round6(v.x), round6(v.y), round6(v.z)];
     const _q4 = q => [round6(q.x), round6(q.y), round6(q.z), round6(q.w)];
     for (const b of S.skeleton.bones) {
-      local.push({ name: b.name, t: _v3(b.position), r: _q4(b.quaternion), s: _v3(b.scale) });
+      const a = boneLocalNode(b);   // the skeleton bone's own local is identity — read the animated twin
+      local.push({ name: b.name, t: _v3(a.position), r: _q4(a.quaternion), s: _v3(a.scale) });
       const wp = new THREE.Vector3(), wq = new THREE.Quaternion(), ws = new THREE.Vector3();
       b.matrixWorld.decompose(wp, wq, ws);
       global.push({ name: b.name, t: _v3(wp), r: _q4(wq) });
@@ -1099,12 +1116,137 @@ $('exp-json').addEventListener('click', async () => {
 
 const round6 = v => Math.round(v * 1e6) / 1e6;
 
+// ---- Godot Animation (.tres) ----
+/** Mixamo-style FBX are centimetres; Godot's FBX import converts to metres.
+ *  three.js keeps raw FBX units, so positions need x0.01 to land on the same
+ *  skeleton the user has in their Godot project. Rotations pass through: both
+ *  engines are right-handed, Y-up, quaternion xyzw. */
+const FBX_CM_TO_M = 0.01;
+
+/** Format a number the way Godot serialises floats: integers bare ("0", "1"),
+ *  floats trimmed. Rounding to 6 decimals first also keeps JS from emitting
+ *  exponential notation (String(1e-7) would break the .tres parser). */
+function gnum(v) {
+  const r = Math.round(v * 1e6) / 1e6;
+  return Object.is(r, -0) ? '0' : String(r);
+}
+
+/** Sample the whole clip's per-bone local TRS (same source as bones.json). */
+function sampleBoneFrames() {
+  const wasPlaying = S.playing, wasFrame = S.frame;
+  S.playing = false;
+  const frames = [];
+  for (let f = 0; f < S.frameCount; f++) {
+    seekFrame(f, false);
+    const row = [];
+    for (const b of S.skeleton.bones) {
+      const a = boneLocalNode(b);
+      row.push({
+        t: [a.position.x, a.position.y, a.position.z],
+        r: [a.quaternion.x, a.quaternion.y, a.quaternion.z, a.quaternion.w],
+        s: [a.scale.x, a.scale.y, a.scale.z],
+      });
+    }
+    frames.push(row);
+  }
+  S.playing = wasPlaying;
+  seekFrame(wasFrame, false);
+  return frames;
+}
+
+/** Build a Godot 4.3+ Animation resource (.tres) from the current clip.
+ *  Bone names follow Godot's imported-skeleton convention (mixamorig:Hips ->
+ *  mixamorig_Hips); tracks that never change collapse to a start/end key pair
+ *  to keep the file small. */
+function godotAnimTres() {
+  if (!S.model || !S.skeleton || S.frameCount < 1) return null;
+  const n = S.frameCount, fps = S.fps;
+  const length = round6(S.duration);
+  const frames = sampleBoneFrames();
+  const bones = S.skeleton.bones;
+  const trackCount = bones.length * 3;
+
+  // per-track flat key arrays: [time, transition, value..., ...]
+  const pos = [], rot = [], scl = [];
+  for (let i = 0; i < bones.length; i++) {
+    const pv = [], rv = [], sv = [];
+    for (let f = 0; f < n; f++) {
+      const b = frames[f][i];
+      pv.push(...[b.t[0] * FBX_CM_TO_M, b.t[1] * FBX_CM_TO_M, b.t[2] * FBX_CM_TO_M]);
+      rv.push(...b.r);
+      sv.push(...b.s);
+    }
+    const collapse = (vals, stride) => {
+      let same = true;
+      for (let k = stride; k < vals.length; k++) if (vals[k] !== vals[k % stride]) { same = false; break; }
+      return same;
+    };
+    pos.push({ v: pv, same: collapse(pv, 3) });
+    rot.push({ v: rv, same: collapse(rv, 4) });
+    scl.push({ v: sv, same: collapse(sv, 3) });
+  }
+
+  const keyBlock = (tr, stride) => {
+    const parts = [];
+    const keys = tr.same ? [0, n - 1] : Array.from({ length: n }, (_, f) => f);
+    for (const f of keys) {
+      const t = round6(f / fps);
+      parts.push(gnum(t), '1');
+      for (let k = 0; k < stride; k++) parts.push(gnum(tr.v[f * stride + k]));
+    }
+    return parts.join(', ');
+  };
+
+  const lines = [
+    '[gd_resource type="Animation" format=3]',
+    '',
+    '[resource]',
+    `length = ${gnum(length)}`,
+    'loop_mode = 1',
+    `step = ${gnum(round6(1 / fps))}`,
+  ];
+  let ti = 0;
+  for (let i = 0; i < bones.length; i++) {
+    const raw = bones[i].userData.originalName || bones[i].name || `bone_${i}`;
+    const bn = raw.replace(/:/g, '_');
+    const rows = [
+      ['position_3d', pos[i], 3],
+      ['rotation_3d', rot[i], 4],
+      ['scale_3d', scl[i], 3],
+    ];
+    for (const [type, tr, stride] of rows) {
+      lines.push(
+        `tracks/${ti}/type = "${type}"`,
+        `tracks/${ti}/imported = false`,
+        `tracks/${ti}/enabled = true`,
+        `tracks/${ti}/path = NodePath("Skeleton3D:${bn}")`,
+        `tracks/${ti}/interp = 1`,
+        `tracks/${ti}/loop_wrap = true`,
+        `tracks/${ti}/keys = PackedFloat32Array(${keyBlock(tr, stride)})`,
+      );
+      ti++;
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
+$('exp-godot').addEventListener('click', async () => {
+  if (!S.model) return;
+  openDlg('导出 Godot 动画', '正在生成 Animation 资源…');
+  const text = godotAnimTres();
+  if (!text) { closeDlg(); return; }
+  const tracks = S.bones.length * 3;
+  download(new Blob([text], { type: 'text/plain' }), `${modelBase()}_anim.tres`);
+  $('dlg-body').textContent = `完成：${tracks} 条轨道，${(text.length / 1024).toFixed(0)} KB`;
+  log(`Godot 动画已导出（.tres · ${S.bones.length} 骨骼 × ${S.frameCount} 帧 · 挂到 AnimationPlayer 即可用）`, 'ok');
+});
+
 // debug / power-user hook
 window.__app = { S, THREE, scene, camera, controls, renderer, seekFrame, renderFrameAt, selectBone,
   encodeGif, download, bgHex, bgTransparent, setBgMode, facingYawDeg, detectForwardYawDeg,
   applyFacing, resetCamera, frameCameraToModel, setViewMode,
   setZoom, zoomFromCamera, exportDistance, exportCentre, stdDistance, updateFrameBox,
-  calibrateExportRig, aimExportCamera, VERSION };
+  calibrateExportRig, aimExportCamera, godotAnimTres, sampleBoneFrames, boneLocalNode, VERSION };
 
 // ---- startup banner ----
 document.title = `FBX Anim Studio v${VERSION}`;

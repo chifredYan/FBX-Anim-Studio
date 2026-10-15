@@ -1,6 +1,6 @@
 # FBX Anim Studio（网页版）
 
-> 版本 **v1.0.0** · 变更记录见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 **v1.1.0** · 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 
 浏览器内的 FBX 骨骼动画查看 / 微调 / 导出工具。纯前端，无后端、无安装。
 
@@ -47,6 +47,7 @@ python -m http.server 8799
 | 序列 ZIP | 全部帧 PNG + `meta.json`，fflate 打包 |
 | GIF | 内置 GIF89a + LZW 编码器，帧延时按累积时间轴分配（30fps 精确） |
 | 骨骼 JSON | 每帧每骨 local + global TRS（与 Godot 命令行工具同约定） |
+| Godot 动画 | Godot 4.3+ Animation 资源（`.tres`），见「Godot 动画」节 |
 
 **背景色**：导出区提供 **绿 / 白** 两个纯色预设 + 棋盘格「纯透明」+ 自定义色盘，对 PNG（单帧/序列）和 GIF 均生效。
 - 纯透明：PNG 保留 alpha 通道；GIF 走透明索引（GIF 不支持半透明，边缘为硬边抠图）
@@ -60,6 +61,22 @@ python -m http.server 8799
 - **人物居中关**：机位固定在世界原点，人物按动画里的真实走位穿过画面（可能移出取景框）。
 - **单帧 PNG**：对当前帧做完整取景迭代，人物精确落在画面正中。
 - **取景框**画的就是这个机位的画面边界（中心 = 世界原点 + 眼高），所以它静止不动、随缩放改变大小。
+
+**Godot 动画（.tres）**：把当前 clip 转成 Godot 原生 Animation 资源，拷进 Godot 工程即可用。
+
+- 轨道：每骨 position / rotation / scale 三条，路径 `Skeleton3D:<骨名>`；骨名按 Godot 导入后的约定转换（`mixamorig:Hips` → `mixamorig_Hips`）；全程未变化的轨道塌缩为首尾两帧
+- 单位：位置 FBX 原始单位 → 米（×0.01，与 Godot 的 FBX 导入一致）；旋转透传（three.js 与 Godot 同为右手系 Y-up 四元数 xyzw）
+- 用法：
+
+  ```gdscript
+  var lib := AnimationLibrary.new()
+  lib.add_animation("idle", load("res://maria_idle_anim.tres"))
+  $AnimationPlayer.add_animation_library("", lib)
+  $AnimationPlayer.play("idle")
+  ```
+
+- 精度：Godot 回环实测与源数据差 ≤ 0.35 mm / ≤ 0.11°（引擎插值精度）；要完全精确请用命令行版
+- 前提：FBX 为厘米单位（Mixamo 等）；米制 FBX 需调整 `app.js` 里的 `FBX_CM_TO_M`
 
 ## 批量导出（命令行）
 

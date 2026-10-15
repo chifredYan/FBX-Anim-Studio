@@ -10,6 +10,9 @@ var facing_yaw_deg := 180.0
 var out_dir := "user://out"
 var do_render := true
 var do_bones := true
+## Also write a native Godot Animation resource (animation.tres) built from the
+## same sampled frames — drop-in usable by any Skeleton3D with matching bones.
+var do_tres := true
 var camera_mode := "side"
 var width := 512
 var height := 512
@@ -47,7 +50,7 @@ var _cam_center_y := 1.0
 func setup(p_scene: PackedScene, p_out: String, p_fps: float, p_facing: float,
 		p_render: bool, p_bones: bool, p_anim: String, p_w: int, p_h: int,
 		p_cam: String, p_bg: Color, p_in_place: bool = true,
-		p_keep_root: bool = true) -> void:
+		p_keep_root: bool = true, p_tres: bool = true) -> void:
 	out_dir = p_out
 	fps = p_fps
 	facing_yaw_deg = p_facing
@@ -204,7 +207,7 @@ func step_frame(f: int) -> void:
 	anim_player.seek(t, true)
 	anim_player.advance(0.0)
 
-	if do_bones:
+	if do_bones or do_tres:
 		_capture_frame(f, t)
 	if do_render:
 		_recenter_camera()
@@ -364,6 +367,43 @@ func write_json(path: String) -> void:
 		return
 	f.store_string(JSON.stringify(payload))
 	f.close()
+
+
+## Write a native Godot Animation resource from the same sampled frames.
+## The track paths (Skeleton3D:<bone>) match this project's imported skeleton,
+## so the .tres drops straight onto any Skeleton3D with the same bone names:
+##   var lib := AnimationLibrary.new()
+##   lib.add_animation("clip", load("res://animation.tres"))
+##   $AnimationPlayer.add_animation_library("", lib)
+func write_tres(path: String) -> void:
+	if skeleton == null or frames.is_empty():
+		printerr("[WARN] no frames sampled, skipping ", path)
+		return
+	var anim := Animation.new()
+	anim.length = _length
+	anim.loop_mode = Animation.LOOP_LINEAR
+	anim.step = 1.0 / fps
+	for i in skeleton.get_bone_count():
+		var bn: String = skeleton.get_bone_name(i)
+		var tp := anim.add_track(Animation.TYPE_POSITION_3D)
+		anim.track_set_path(tp, "Skeleton3D:" + bn)
+		var tr := anim.add_track(Animation.TYPE_ROTATION_3D)
+		anim.track_set_path(tr, "Skeleton3D:" + bn)
+		var ts := anim.add_track(Animation.TYPE_SCALE_3D)
+		anim.track_set_path(ts, "Skeleton3D:" + bn)
+		for fr in frames:
+			var b: Dictionary = fr["local"][i]
+			anim.position_track_insert_key(tp, fr["time"],
+				Vector3(b["t"][0], b["t"][1], b["t"][2]))
+			anim.rotation_track_insert_key(tr, fr["time"],
+				Quaternion(b["r"][0], b["r"][1], b["r"][2], b["r"][3]))
+			anim.scale_track_insert_key(ts, fr["time"],
+				Vector3(b["s"][0], b["s"][1], b["s"][2]))
+	var err := ResourceSaver.save(anim, path)
+	if err != OK:
+		printerr("[WARN] cannot write ", path, " err=", err)
+	else:
+		print("[TRES_WRITTEN] ", ProjectSettings.globalize_path(path))
 
 
 func _v3(v: Vector3) -> Array:

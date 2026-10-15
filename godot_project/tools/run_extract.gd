@@ -11,6 +11,7 @@ const Extractor := preload("res://tools/anim_extractor.gd")
 var ex
 var out_dir := ""
 var do_render := true
+var do_tres := true
 var pending := false
 var frame_i := 0
 var total_frames := 0
@@ -54,6 +55,7 @@ func _ready() -> void:
 	var bg := _parse_bg(args.get("bg", ""))
 	var do_render: bool = args.get("render", "1") == "1"
 	var do_bones: bool = args.get("bones", "1") == "1"
+	var do_tres: bool = args.get("tres", "1") == "1"
 	tool_version = args.get("tool_version", "")
 
 	var packed: PackedScene = ResourceLoader.load(res_path, "PackedScene")
@@ -68,7 +70,7 @@ func _ready() -> void:
 	ex = Extractor.new()
 	add_child(ex)
 	ex.setup(packed, out_dir, fps, facing, do_render, do_bones, anim, w, h, cam, bg,
-			in_place, keep_root)
+			in_place, keep_root, do_tres)
 
 	if ex.results.get("fatal", "") != "":
 		_fail(ex.results["fatal"])
@@ -127,6 +129,8 @@ func _finish() -> void:
 		mf.close()
 	if do_bones_meta():
 		ex.write_json(out_dir.path_join("bones.json"))
+	if do_tres:
+		ex.write_tres(out_dir.path_join("animation.tres"))
 
 	print("[EXTRACT_DONE] ", JSON.stringify({
 		"animation": meta["animation"],

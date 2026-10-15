@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 HERE = Path(__file__).resolve().parent
 GODOT_PROJECT = HERE / "godot_project"
@@ -170,6 +170,7 @@ def run_extract(
     in_place: bool,
     keep_root: bool,
     bg: str,
+    tres: bool,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     args = [
@@ -208,6 +209,8 @@ def run_extract(
         "1" if keep_root else "0",
         "--tool_version",
         __version__,
+        "--tres",
+        "1" if tres else "0",
     ]
     if anim:
         args += ["--anim", anim]
@@ -286,6 +289,13 @@ def main() -> int:
         default=False,
         help="also preserve root drift inside bones.json",
     )
+    ap.add_argument(
+        "--no-tres",
+        dest="tres",
+        action="store_false",
+        default=True,
+        help="skip the native Godot Animation .tres export (on by default)",
+    )
     ap.add_argument("--godot", type=Path, default=None)
     ap.add_argument("--host-project", type=Path, default=DEFAULT_HOST_PROJECT)
     ap.add_argument(
@@ -336,7 +346,7 @@ def main() -> int:
     meta = run_extract(
         godot, host, scene, out_dir, args.fps, args.facing, args.cam,
         args.width, args.height, args.anim, args.render, args.bones,
-        args.in_place, args.keep_root_motion, args.bg,
+        args.in_place, args.keep_root_motion, args.bg, args.tres,
     )
 
     if args.gif and args.render:
@@ -350,7 +360,7 @@ def main() -> int:
     log(f"output    : {out_dir}")
     produced = sorted(
         p.name for p in out_dir.iterdir()
-        if p.suffix in {".json", ".gif", ".png"} and not p.name.startswith("contact_")
+        if p.suffix in {".json", ".gif", ".png", ".tres"} and not p.name.startswith("contact_")
     )
     log(f"files     : {len(produced)} ({', '.join(produced[:6])}{'...' if len(produced) > 6 else ''})")
     return 0

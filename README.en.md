@@ -6,14 +6,14 @@
 >
 > 浏览器端的 FBX 骨骼动画查看、微调与导出工具。纯前端零安装，另附一条 Godot 命令行管线。
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![three.js](https://img.shields.io/badge/three.js-r160-000000.svg)
 ![Godot](https://img.shields.io/badge/godot-4.7-478cbf.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 
-**Current version: v1.0.0** — see [CHANGELOG.md](CHANGELOG.md) for the changelog.
+**Current version: v1.1.0** — see [CHANGELOG.md](CHANGELOG.md) for the changelog.
 
 ## Table of Contents
 
@@ -56,12 +56,14 @@ Typical workflow: dial in framing, facing, and zoom in the web tool → run the 
 - **Frame-by-frame playback**: spacebar play/pause, `←` `→` step, timeline click/drag to scrub, fps 12–60 selectable
 - **Remove translation / center character**: in-place playback (x/z pinned to the baseline, vertical bounce preserved); the character is pinned to frame center every frame so sequences don't drift
 - **Four export types**: single-frame PNG, PNG-sequence ZIP (with `meta.json`), GIF, and skeleton JSON
+- **Godot animation export**: one click produces a native Godot Animation resource (`.tres`) — attach it to an AnimationPlayer and play
 - **Controllable background**: green / white presets, pure transparency (PNG keeps alpha), custom color picker; GIF transparency uses a dedicated palette index for hard-edge cutouts
 - **Fixed-camera framing**: sequence export calibrates one camera on frame 0 (skeleton coarse alignment + pixel-centroid iterative convergence) shared by the whole sequence — the camera never moves between frames
 
 ### fbx-anim-tool (CLI)
 
-- **One command, full output**: `bones.json` + 30 fps PNG sequence + GIF + contact-sheet thumbnails
+- **One command, full output**: `bones.json` + 30 fps PNG sequence + GIF + contact-sheet thumbnails + **a Godot Animation resource (`animation.tres`)**
+- **Native .tres**: generated inside Godot against the real skeleton — numerically exact (`--no-tres` to skip)
 - **Bones only**: `--no-render --no-gif` finishes in seconds
 - **Independent facing / camera**: `--facing` only rotates the model; `--cam` fixes the world camera direction
 - **In-place playback**: zeroes the hip position track's x/z (keeps y) by default so run cycles play in place
@@ -114,6 +116,7 @@ Output in `output/run/`:
 | File | Contents |
 |---|---|
 | `bones.json` | local / global TRS (quaternion xyzw) for 65 bones per frame |
+| `animation.tres` | Godot 4.3+ Animation resource, attachable to an AnimationPlayer |
 | `frame_0000.png` … | 30 fps per-frame renders |
 | `animation.gif` | 30 fps looping GIF |
 | `meta.json` | animation name, frame count, bone table, facing, available clips |
@@ -168,11 +171,28 @@ export FBXAT_HOST_PROJECT="D:\path\to\any\godot\project"
 | 序列 ZIP (Sequence ZIP) | all frames as PNG + `meta.json`, packed with fflate |
 | GIF | GIF89a + LZW encoding, frame delays distributed along the cumulative timeline (exact 30 fps) |
 | 骨骼 JSON (Skeleton JSON) | per-frame per-bone local + global TRS (same convention as the CLI tool) |
+| Godot 动画 (Godot anim) | Godot 4.3+ Animation resource (`.tres`) — see below |
 
 - Background color: green / white presets + checkerboard "pure transparency" + custom color picker; applies to PNG (single/sequence) and GIF.
 - Pure transparency: PNG keeps the alpha channel; GIF uses a transparency index (slot 255 is reserved, so pure black is never keyed out).
 - Exports auto-hide joint spheres and bone lines; in pure-transparency mode the ground grid is hidden too.
 - Framing strategy: with **center character on**, the whole sequence shares the camera calibrated on frame 0 (no inter-frame shake); with it **off**, the camera is fixed at the world origin and the character crosses the frame per its real locomotion; **single-frame PNG** runs the full framing iteration on the current frame, landing the character exactly at frame center.
+
+**Godot animation (.tres)** — convert the current clip into a native Godot Animation resource; copy it into your Godot project and use it directly:
+
+- Tracks: position / rotation / scale per bone, path `Skeleton3D:<bone_name>`; names follow Godot's imported-skeleton convention (`mixamorig:Hips` → `mixamorig_Hips`); tracks that never change collapse to a start/end key pair to keep the file small
+- Units: positions convert from the FBX's raw units to metres (×0.01, matching Godot's FBX import); rotations pass through — three.js and Godot are both right-handed, Y-up, quaternion xyzw
+- Usage:
+
+  ```gdscript
+  var lib := AnimationLibrary.new()
+  lib.add_animation("idle", load("res://maria_idle_anim.tres"))
+  $AnimationPlayer.add_animation_library("", lib)
+  $AnimationPlayer.play("idle")
+  ```
+
+- Accuracy: Godot round-trip tests (apply to the imported Maria skeleton, read poses back) land within 0.35 mm / 0.11° of the source data — the residual is the two engines' keyframe interpolation precision, invisible in practice; for bit-exact output use the CLI (it generates inside Godot against the real skeleton)
+- Prerequisite: the FBX is in centimetres (Mixamo et al.). For metre-unit FBX, adjust `FBX_CM_TO_M` in `app.js`
 
 **Batch export (CLI-driven page)**
 
@@ -204,6 +224,9 @@ python fbx_anim_tool.py model.fbx --fps 60 --loop 0
 
 # keep the original root motion (default pins the hips so run cycles play in place)
 python fbx_anim_tool.py model.fbx --no-in-place
+
+# skip the Godot animation resource (animation.tres is produced by default)
+python fbx_anim_tool.py model.fbx --no-tres
 ```
 
 `--facing` sets which way the character faces (combined with `--cam side` for a side-view camera):
@@ -253,7 +276,7 @@ python make_gif.py path/to/frames --fps 30 --bg "#17171c" --sheet
 }
 ```
 
-`local` is the parent-relative pose, suitable for driving an engine's skeleton; `global` is the world pose, suitable for direct IK or collision placement. `bone_names` maps indices to bone names. A PNG sequence's `meta.json` additionally records the background color (`background` field), resolution, and frame count.
+`local` is the parent-relative pose, suitable for driving an engine's skeleton; `global` is the world pose, suitable for direct IK or collision placement (since v1.1.0 `local` is the true parent-relative pose — earlier versions exported identity due to three.js FBXLoader's twin-node structure). `bone_names` maps indices to bone names. A PNG sequence's `meta.json` additionally records the background color (`background` field), resolution, and frame count.
 
 ---
 
@@ -303,6 +326,7 @@ FBX-Anim-Studio/
 - **GIF encoding**: midpoint-split quantization to 256 colors + LZW (with 4096-entry table-full reset), frame delays rounded along the cumulative timeline to avoid accumulated error; transparent GIFs reserve index 255 exclusively for transparency
 - **Godot offscreen rendering**: `--headless` uses the dummy renderer, where `get_image()` only returns empty — so the CLI runs a minimal window (64×64, placed offscreen at 5000,5000) with the Vulkan backend, and a SubViewport produces the offscreen frames
 - **Batch export pipeline**: per-frame in-page rendering → POST to a local receiver for disk writes, working around headless browsers cancelling blob downloads; git-bash does not expand `[012]` bracket globs, so textures are listed explicitly as `_0/_1/_2` with case-insensitive matching
+- **Round-trip self-check**: `godot_project/tools/roundtrip_test.gd` loads any `.tres`, applies it to the imported skeleton, and reads poses back — run it inside a Godot project that has the FBX imported to verify an export
 
 ---
 

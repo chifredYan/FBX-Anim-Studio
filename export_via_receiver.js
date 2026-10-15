@@ -27,7 +27,13 @@
     sizes.push(+(await r.text()));
     if (f % 4 === 3) await new Promise(res => setTimeout(res));
   }
+  // Godot Animation resource alongside the PNG sequence
+  const tres = A.godotAnimTres();
+  if (tres) {
+    await fetch('http://127.0.0.1:8800/save?p=' + encodeURIComponent(dir + '/' + base + '_anim.tres'), { method: 'POST', body: tres });
+  }
   return JSON.stringify({ clip: S.clips.length ? S.clips[0].name : '?', frames: S.frameCount, dir,
-    textures: mapped + '/' + meshes, first: sizes.slice(0, 2), last: sizes.slice(-2),
+    textures: mapped + '/' + meshes, tresBytes: tres ? tres.length : 0,
+    first: sizes.slice(0, 2), last: sizes.slice(-2),
     totalMB: +(sizes.reduce((a, b) => a + b, 0) / 1048576).toFixed(2) });
 })()
