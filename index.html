@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>FBX Anim Studio — 骨骼动画提取与微调</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --border: #d3d1c7;
+  --text: #2c2c2a; --muted: #888780;
+  --accent: #185fa5; --accent-bg: #e6f1fb;
+  --danger: #a32d2d; --ok: #0f6e56;
+  --key: #c77d1f;
+}
+html, body { height: 100%; }
+body { font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--text); background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
+
+#toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+#toolbar .logo { font-weight: 600; margin-right: 10px; color: var(--accent); }
+#toolbar .logo .ver { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+#toolbar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+.flex1 { flex: 1; }
+button { padding: 4px 10px; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; cursor: pointer; font: inherit; white-space: nowrap; }
+button:hover { background: var(--accent-bg); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary:hover { filter: brightness(1.1); }
+button:disabled { opacity: .45; cursor: default; }
+.muted { color: var(--muted); }
+label.chk { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+input[type=range] { vertical-align: middle; }
+#zoom { width: 130px; }
+#zoom-v { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+#zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select { font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+
+#layout { flex: 1; display: flex; min-height: 0; }
+.panel { background: var(--panel); overflow: auto; }
+
+/* 左侧骨架树 */
+#tree { width: 225px; border-right: 1px solid var(--border); padding: 6px; }
+.tree-title { font-weight: 600; padding: 4px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border); }
+.bone-item { padding: 2px 6px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 4px; }
+.bone-item:hover { background: var(--accent-bg); }
+.bone-item.sel { background: var(--accent); color: #fff; }
+.depth-1 { padding-left: 16px; } .depth-2 { padding-left: 28px; } .depth-3 { padding-left: 40px; }
+.depth-4 { padding-left: 52px; } .depth-5 { padding-left: 64px; } .depth-6, .depth-7, .depth-8 { padding-left: 74px; }
+
+/* 中央视口 + 时间轴 */
+#center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#viewport-wrap { flex: 1; position: relative; min-height: 0; background:
+  repeating-conic-gradient(#ecebe4 0% 25%, #fbfaf7 0% 50%) 0 0/24px 24px; }
+#viewport { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#vp-hud { position: absolute; top: 8px; left: 10px; font-size: 12px; color: var(--muted);
+  background: rgba(255,255,255,.85); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); pointer-events: none; }
+#drop-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px; color: var(--muted); font-size: 15px; pointer-events: none; }
+#drop-hint .big { font-size: 40px; }
+#viewport-wrap.dragover::after { content: "松开导入 FBX"; position: absolute; inset: 8px; border: 2px dashed var(--accent);
+  border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 16px; background: rgba(230,241,251,.6); }
+
+/* 时间轴 */
+#timeline { height: 148px; border-top: 1px solid var(--border); padding: 6px 8px; background: var(--panel); display: flex; flex-direction: column; gap: 4px; }
+#tl-row { display: flex; align-items: center; gap: 8px; }
+#track { flex: 1; position: relative; height: 56px; border: 1px solid var(--border); border-radius: 6px; background: #fbfaf7; overflow: hidden; cursor: crosshair; }
+#track-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#frame-label { min-width: 120px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* 右侧 inspector */
+#inspector { width: 268px; border-left: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; min-height: 0; }
+#inspector h3 { font-size: 13px; padding-bottom: 4px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.sec { margin-bottom: 12px; }
+.sec .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.sec .row label { min-width: 24px; color: var(--muted); }
+.sec .row input[type=range] { flex: 1; }
+.sec .row .val { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+.btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.btnrow button { flex: 1; padding: 3px 6px; font-size: 12px; }
+.export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+/* 背景色预设 */
+#bg-swatches { display: flex; gap: 5px; }
+.sw { width: 28px; height: 22px; padding: 0; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--c, #cccccc); cursor: pointer; }
+button.sw:hover { background: var(--c, #cccccc); filter: brightness(1.1); }
+.sw.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sw.sw-alpha { background: repeating-conic-gradient(#e4e4e4 0% 25%, #ffffff 0% 50%) 0 0/10px 10px; }
+.sw-custom-input { width: 34px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+#log { flex: 1 1 auto; min-height: 72px; font-size: 12px; color: var(--muted); overflow: auto; border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); padding: 6px 0; margin-top: 8px; white-space: pre-wrap; }
+.ok { color: var(--ok); } .err { color: var(--danger); }
+
+dialog { border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.18); padding: 14px; min-width: 340px; }
+dialog::backdrop { background: rgba(0,0,0,.25); }
+dialog h3 { margin-bottom: 8px; }
+dialog .form-row { margin: 8px 0; display: flex; align-items: center; gap: 8px; }
+dialog .form-row label { min-width: 84px; }
+#export-progress { margin-top: 10px; }
+progress { width: 100%; height: 14px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/"
+  }
+}
+</script>
+</head>
+<body>
+
+<header id="toolbar">
+  <span class="logo">FBX Anim Studio<span class="ver" id="ver"></span></span>
+  <button id="btn-open" class="primary">导入 FBX</button>
+  <input type="file" id="file-fbx" accept=".fbx" hidden>
+  <button id="btn-tex" title="FBX 贴图是外置 PNG 时，一并选择">上传贴图</button>
+  <input type="file" id="file-tex" accept="image/*" multiple hidden>
+  <span class="sep"></span>
+  <label class="chk" title="模型朝向：相机固定在正前方，模型按 90° 整数倍转向">朝向
+    <select id="facing">
+      <option value="left" selected>left</option>
+      <option value="right">right</option>
+      <option value="front">front</option>
+      <option value="back">back</option>
+      <option value="free">自由</option>
+    </select>
+  </label>
+  <button id="btn-resetview" title="相机回到绝对水平的标准视角">⟲ 复位视角</button>
+  <label class="chk" title="缩放倍率：滚轮或拖动滑块；点中滑块后 ←/→ 微调 0.01，Shift+←/→ 粗调 0.1，双击回默认">缩放
+    <input type="range" id="zoom" min="0.25" max="4" step="0.01" value="0.6">
+    <span class="val" id="zoom-v">0.60×</span>
+  </label>
+  <button id="btn-frame" class="primary" title="橙色方框内 = 导出 PNG / GIF 实际拿到的画面范围">取景框:开</button>
+  <button id="btn-ground" title="显示/隐藏地面网格">地面:开</button>
+  <button id="btn-skel" title="显示/隐藏骨架线与关节小球">骨骼:关</button>
+  <span class="sep"></span>
+  <button id="btn-prev" title="上一帧 (←)">⏮</button>
+  <button id="btn-play" title="播放/暂停 (空格)">▶</button>
+  <button id="btn-next" title="下一帧 (→)">⏭</button>
+  <label class="chk" title="采样帧率">fps
+    <select id="fps">
+      <option>12</option><option>15</option>
+      <option selected>30</option><option>60</option>
+    </select>
+  </label>
+  <label class="chk" title="去掉动画里人物向前走/跑的位移，让他原地做动作；垂直起伏保留。关闭则导出的骨骼数据会带上真实位移"><input type="checkbox" id="chk-inplace">消除位移</label>
+  <label class="chk" title="逐帧把人物钉在画面正中，导出的 GIF / PNG 序列不会左右漂移（垂直也居中）"><input type="checkbox" id="chk-center" checked>人物居中</label>
+  <span class="flex1"></span>
+  <span id="clip-info" class="muted"></span>
+  <select id="clip" title="动画 clip"><option value="">（无动画）</option></select>
+</header>
+
+<div id="layout">
+  <aside id="tree" class="panel">
+    <div class="tree-title">骨架 <span id="bone-count" class="muted"></span></div>
+    <div id="bone-tree"><div class="muted" style="padding:8px">尚未导入模型</div></div>
+  </aside>
+
+  <div id="center">
+    <div id="viewport-wrap">
+      <canvas id="viewport"></canvas>
+      <div id="vp-hud">拖动旋转 · 滚轮缩放 · 右键平移 · 点击小球选中骨骼</div>
+      <div id="drop-hint">
+        <div class="big">📦</div>
+        <div>把 .fbx 拖进来，或点左上角「导入 FBX」</div>
+        <div class="muted" style="font-size:12px">贴图是外置 PNG 的话（如 Maria *_0.png），点「上传贴图」一起选上</div>
+      </div>
+    </div>
+    <div id="timeline">
+      <div id="tl-row">
+        <span id="frame-label">帧 0 / 0</span>
+        <div id="track"><canvas id="track-canvas"></canvas></div>
+      </div>
+      <div id="tl-row" class="muted" style="font-size:12px">
+        <span>时间轴：点击/拖动跳帧 · 导出用当前 fps、朝向与缩放 · 开「取景框」可预览导出范围</span>
+      </div>
+    </div>
+  </div>
+
+  <aside id="inspector" class="panel">
+    <h3>导出</h3>
+    <div class="sec">
+      <div class="row"><label class="chk">分辨率
+        <select id="exp-res">
+          <option>256</option><option selected>512</option>
+          <option>768</option><option>1024</option><option>2048</option>
+        </select>
+      </label></div>
+      <div class="row"><label>背景</label>
+        <div id="bg-swatches">
+          <button class="sw" data-bg="green" style="--c:#2f9e44" title="绿 #2f9e44"></button>
+          <button class="sw" data-bg="white" style="--c:#ffffff" title="白 #ffffff"></button>
+          <button class="sw sw-alpha" data-bg="alpha" title="纯透明"></button>
+        </div>
+      </div>
+      <div class="row"><label>自定义</label>
+        <input type="color" id="exp-bg" class="sw-custom-input" value="#17171c">
+        <span class="val" id="exp-bg-hex">#17171c</span>
+      </div>
+      <div class="muted" id="bg-hint" style="font-size:11px;margin:2px 0 6px"></div>
+      <div class="export-grid">
+        <button id="exp-png1" class="primary">单帧 PNG</button>
+        <button id="exp-pngseq">序列 ZIP</button>
+        <button id="exp-gif">GIF</button>
+        <button id="exp-json">骨骼 JSON</button>
+      </div>
+    </div>
+    <div id="log"></div>
+  </aside>
+</div>
+
+<dialog id="dlg-export">
+  <h3 id="dlg-title">导出中…</h3>
+  <div id="dlg-body" class="muted"></div>
+  <div id="export-progress"><progress id="dlg-bar" value="0" max="100"></progress></div>
+  <div style="margin-top:10px;text-align:right"><button id="dlg-close">关闭</button></div>
+</dialog>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
